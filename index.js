@@ -1,23 +1,18 @@
-// 注意：此文件应以 .mjs 结尾，或在 package.json 中设置 "type": "module"
-
-// 1. 导入 (import) 模块，替换 require
+// 注意：必须使用 ES Module 模式
 import express from "express";
 import axios from "axios";
 import os from 'os';
 import fs from "fs";
 import path from "path";
-// import { promisify } from 'util'; // 如果只需要 exec，可以单独导入
-import { exec } from 'child_process';
-import { execSync } from 'child_process'; // execSync 保持不变，但通常用 import
 import { promisify } from 'util';
+import { exec, execSync } from 'child_process'; 
 
-// 再次 promisify exec，因为我们现在使用 import from 'child_process'
+// 重新 promisify exec，用于 await
 const execAsync = promisify(exec);
-
 
 const app = express();
 
-// 环境变量和常量保持不变
+// 环境变量和常量定义 (保持不变)
 const UPLOAD_URL = process.env.UPLOAD_URL || '';
 const PROJECT_URL = process.env.PROJECT_URL || '';
 const AUTO_ACCESS = process.env.AUTO_ACCESS || false;
@@ -35,8 +30,7 @@ const CFIP = process.env.CFIP || 'cdns.doon.eu.org';
 const CFPORT = process.env.CFPORT || 443;
 const NAME = process.env.NAME || '';
 
-// *** 顶层 await 的第一处应用 ***
-// 创建运行文件夹 (使用 fs/promises 的同步版本或顶层 await)
+// 创建运行文件夹 (使用同步操作或顶层 await)
 if (!fs.existsSync(FILE_PATH)) {
   fs.mkdirSync(FILE_PATH);
   console.log(`${FILE_PATH} is created`);
@@ -44,7 +38,7 @@ if (!fs.existsSync(FILE_PATH)) {
   console.log(`${FILE_PATH} already exists`);
 }
 
-// ... (generateRandomName, 全局常量定义等函数和变量保持不变)
+// 辅助函数定义
 function generateRandomName() {
   const characters = 'abcdefghijklmnopqrstuvwxyz';
   let result = '';
@@ -67,17 +61,157 @@ let subPath = path.join(FILE_PATH, 'sub.txt');
 let listPath = path.join(FILE_PATH, 'list.txt');
 let bootLogPath = path.join(FILE_PATH, 'boot.log');
 let configPath = path.join(FILE_PATH, 'config.json');
-// ... (deleteNodes, cleanupOldFiles, app.get, generateConfig, getSystemArchitecture, downloadFile, getFilesForArchitecture, argoType, killBotProcess, extractDomains, getMetaInfo, uploadNodes, killBotProcess 保持不变)
 
-// ... (由于篇幅限制，中间的大部分函数保持不变，但请注意，如果您在这些函数内部使用了 promisify(require('child_process').exec)，您需要使用上面定义的 `execAsync` 变量来代替 `exec`)
+// =========================================================================
+// 确保所有被 startserver 调用的函数都在这里定义
+// =========================================================================
 
-// ----------------------------------------------------------------------------------------------------
-// ⚠️ 重点修改区域：downloadFilesAndRun 函数内部，将原有的 `exec` 替换为 `execAsync`
-// ----------------------------------------------------------------------------------------------------
+// 1. deleteNodes
+function deleteNodes() {
+  // ... (函数内容保持不变)
+  try {
+    if (!UPLOAD_URL) return;
+    if (!fs.existsSync(subPath)) return;
 
-// 下载并运行依赖文件
+    let fileContent;
+    try {
+      fileContent = fs.readFileSync(subPath, 'utf-8');
+    } catch {
+      return null;
+    }
+
+    const decoded = Buffer.from(fileContent, 'base64').toString('utf-8');
+    const nodes = decoded.split('\n').filter(line =>
+      /(vless|vmess|trojan|hysteria2|tuic):\/\//.test(line)
+    );
+
+    if (nodes.length === 0) return;
+
+    axios.post(`${UPLOAD_URL}/api/delete-nodes`,
+      JSON.stringify({ nodes }),
+      { headers: { 'Content-Type': 'application/json' } }
+    ).catch((error) => {
+      return null;
+    });
+    return null;
+  } catch (err) {
+    return null;
+  }
+}
+
+// 2. cleanupOldFiles
+function cleanupOldFiles() {
+  // ... (函数内容保持不变)
+  try {
+    const files = fs.readdirSync(FILE_PATH);
+    files.forEach(file => {
+      const filePath = path.join(FILE_PATH, file);
+      try {
+        const stat = fs.statSync(filePath);
+        if (stat.isFile()) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (err) {
+        // 忽略所有错误，不记录日志
+      }
+    });
+  } catch (err) {
+    // 忽略所有错误，不记录日志
+  }
+}
+
+// 3. generateConfig
+async function generateConfig() {
+  // ... (函数内容保持不变)
+  const config = {
+    log: { access: '/dev/null', error: '/dev/null', loglevel: 'none' },
+    inbounds: [
+      { port: ARGO_PORT, protocol: 'vless', settings: { clients: [{ id: UUID, flow: 'xtls-rprx-vision' }], decryption: 'none', fallbacks: [{ dest: 3001 }, { path: "/vless-argo", dest: 3002 }, { path: "/vmess-argo", dest: 3003 }, { path: "/trojan-argo", dest: 3004 }] }, streamSettings: { network: 'tcp' } },
+      { port: 3001, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID }], decryption: "none" }, streamSettings: { network: "tcp", security: "none" } },
+      { port: 3002, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "ws", security: "none", wsSettings: { path: "/vless-argo" } }, sniffing: { enabled: true, destOverride: ["http", "tls", "quic"], metadataOnly: false } },
+      { port: 3003, listen: "127.0.0.1", protocol: "vmess", settings: { clients: [{ id: UUID, alterId: 0 }] }, streamSettings: { network: "ws", wsSettings: { path: "/vmess-argo" } }, sniffing: { enabled: true, destOverride: ["http", "tls", "quic"], metadataOnly: false } },
+      { port: 3004, listen: "127.0.0.1", protocol: "trojan", settings: { clients: [{ password: UUID }] }, streamSettings: { network: "ws", security: "none", wsSettings: { path: "/trojan-argo" } }, sniffing: { enabled: true, destOverride: ["http", "tls", "quic"], metadataOnly: false } },
+    ],
+    dns: { servers: ["https+local://8.8.8.8/dns-query"] },
+    outbounds: [{ protocol: "freedom", tag: "direct" }, { protocol: "blackhole", tag: "block" }]
+  };
+  fs.writeFileSync(path.join(FILE_PATH, 'config.json'), JSON.stringify(config, null, 2));
+}
+
+// 4. getSystemArchitecture
+function getSystemArchitecture() {
+  // ... (函数内容保持不变)
+  const arch = os.arch();
+  if (arch === 'arm' || arch === 'arm64' || arch === 'aarch64') {
+    return 'arm';
+  } else {
+    return 'amd';
+  }
+}
+
+// 5. getFilesForArchitecture (用于 downloadFilesAndRun)
+function getFilesForArchitecture(architecture) {
+  // ... (函数内容保持不变)
+  let baseFiles;
+  if (architecture === 'arm') {
+    baseFiles = [
+      { fileName: webPath, fileUrl: "https://arm64.ssss.nyc.mn/web" },
+      { fileName: botPath, fileUrl: "https://arm64.ssss.nyc.mn/bot" }
+    ];
+  } else {
+    baseFiles = [
+      { fileName: webPath, fileUrl: "https://amd64.ssss.nyc.mn/web" },
+      { fileName: botPath, fileUrl: "https://amd64.ssss.nyc.mn/bot" }
+    ];
+  }
+
+
+  return baseFiles;
+}
+
+// 6. downloadFile (用于 downloadFilesAndRun)
+function downloadFile(fileName, fileUrl, callback) {
+  // ... (函数内容保持不变)
+  const filePath = fileName;
+
+  // 确保目录存在
+  if (!fs.existsSync(FILE_PATH)) {
+    fs.mkdirSync(FILE_PATH, { recursive: true });
+  }
+
+  const writer = fs.createWriteStream(filePath);
+
+  axios({
+    method: 'get',
+    url: fileUrl,
+    responseType: 'stream',
+  })
+    .then(response => {
+      response.data.pipe(writer);
+
+      writer.on('finish', () => {
+        writer.close();
+        console.log(`Download ${path.basename(filePath)} successfully`);
+        callback(null, filePath);
+      });
+
+      writer.on('error', err => {
+        fs.unlink(filePath, () => { });
+        const errorMessage = `Download ${path.basename(filePath)} failed: ${err.message}`;
+        console.error(errorMessage); // 下载失败时输出错误消息
+        callback(errorMessage);
+      });
+    })
+    .catch(err => {
+      const errorMessage = `Download ${path.basename(filePath)} failed: ${err.message}`;
+      console.error(errorMessage); // 下载失败时输出错误消息
+      callback(errorMessage);
+    });
+}
+
+// 7. downloadFilesAndRun (内部使用 execAsync)
 async function downloadFilesAndRun() {
-
+  // ... (函数内容保持不变)
   const architecture = getSystemArchitecture();
   const filesToDownload = getFilesForArchitecture(architecture);
 
@@ -126,8 +260,7 @@ async function downloadFilesAndRun() {
   //运行xr-ay
   const command1 = `nohup ${webPath} -c ${FILE_PATH}/config.json >/dev/null 2>&1 &`;
   try {
-    // 替换为 execAsync
-    await execAsync(command1);
+    await execAsync(command1); // 使用 execAsync
     console.log(`${webName} is running`);
     await new Promise((resolve) => setTimeout(resolve, 1000));
   } catch (error) {
@@ -147,8 +280,7 @@ async function downloadFilesAndRun() {
     }
 
     try {
-      // 替换为 execAsync
-      await execAsync(`nohup ${botPath} ${args} >/dev/null 2>&1 &`);
+      await execAsync(`nohup ${botPath} ${args} >/dev/null 2>&1 &`); // 使用 execAsync
       console.log(`${botName} is running`);
       await new Promise((resolve) => setTimeout(resolve, 2000));
     } catch (error) {
@@ -156,30 +288,125 @@ async function downloadFilesAndRun() {
     }
   }
   await new Promise((resolve) => setTimeout(resolve, 5000));
+
 }
 
-// ... (cleanFiles, AddVisitTask 等函数保持不变)
+// 8. argoType (原先导致 ReferenceError 的函数)
+function argoType() {
+  // ... (函数内容保持不变)
+  if (!ARGO_AUTH || !ARGO_DOMAIN) {
+    console.log("ARGO_DOMAIN or ARGO_AUTH variable is empty, use quick tunnels");
+    return;
+  }
 
-// ----------------------------------------------------------------------------------------------------
-// 🚀 核心修改区域：移除 IIFE，并直接在顶层执行 startserver()
-// ----------------------------------------------------------------------------------------------------
+  if (ARGO_AUTH.includes('TunnelSecret')) {
+    fs.writeFileSync(path.join(FILE_PATH, 'tunnel.json'), ARGO_AUTH);
+    const tunnelYaml = `
+tunnel: ${ARGO_AUTH.split('"')[11]}
+credentials-file: ${path.join(FILE_PATH, 'tunnel.json')}
+protocol: http2
 
-// 主运行逻辑
+ingress:
+  - hostname: ${ARGO_DOMAIN}
+    service: http://localhost:${ARGO_PORT}
+    originRequest:
+      noTLSVerify: true
+  - service: http_status:404
+`;
+    fs.writeFileSync(path.join(FILE_PATH, 'tunnel.yml'), tunnelYaml);
+  } else {
+    console.log("ARGO_AUTH mismatch TunnelSecret,use token connect to tunnel");
+  }
+}
+
+// 9. AddVisitTask
+async function AddVisitTask() {
+  // ... (函数内容保持不变)
+  if (!AUTO_ACCESS || !PROJECT_URL) {
+    console.log("Skipping adding automatic access task");
+    return;
+  }
+
+  try {
+    const response = await axios.post('https://oooo.serv00.net/add-url', {
+      url: PROJECT_URL
+    }, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    // console.log(`${JSON.stringify(response.data)}`);
+    console.log(`automatic access task added successfully`);
+    return response;
+  } catch (error) {
+    console.error(`Add automatic access task faild: ${error.message}`);
+    return null;
+  }
+}
+
+// 10. killBotProcess, extractDomains, getMetaInfo, uploadNodes (这些函数在您的代码片段末尾丢失，请确保它们也被定义在 startserver 之前)
+
+// 假设我们现在已经将所有依赖函数定义在上方...
+
+// 11. 主运行逻辑 startserver
 async function startserver() {
   try {
+    // 确保这些函数调用在定义之后
     argoType();
     deleteNodes();
     cleanupOldFiles();
     await generateConfig();
     await downloadFilesAndRun();
-    await extractDomains();
+    // 假设 extractDomains, killBotProcess, generateLinks, getMetaInfo, uploadNodes
+    // 等后续逻辑函数也已定义在上方或在 downloadFilesAndRun 内部被正确调用。
+    // 由于您的代码片段缺少这些函数的完整定义，这里先跳过它们。
+
+    // await extractDomains(); 
     await AddVisitTask();
   } catch (error) {
     console.error('Error in startserver:', error);
   }
 }
 
-// 2. 顶层 await - 直接调用 async 函数
+// =========================================================================
+// 最终执行逻辑：顶层 Await
+// =========================================================================
+
+// Root 路由 (保持不变)
+app.get("/", function (req, res) {
+  res.send("Hello world!");
+});
+
+// cleanFiles 函数（保持不变）
+function cleanFiles() {
+  setTimeout(() => {
+    const filesToDelete = [bootLogPath, configPath, webPath, botPath];
+
+    if (NEZHA_PORT) {
+      filesToDelete.push(npmPath);
+    } else if (NEZHA_SERVER && NEZHA_KEY) {
+      filesToDelete.push(phpPath);
+    }
+
+    // Windows系统使用不同的删除命令
+    if (process.platform === 'win32') {
+      execSync(`del /f /q ${filesToDelete.join(' ')} > nul 2>&1`, (error) => {
+        console.clear();
+        console.log('App is running');
+        console.log('Thank you for using this script, enjoy!');
+      });
+    } else {
+      execSync(`rm -rf ${filesToDelete.join(' ')} >/dev/null 2>&1`, (error) => {
+        console.clear();
+        console.log('App is running');
+        console.log('Thank you for using this script, enjoy!');
+      });
+    }
+  }, 90000); // 90s
+}
+cleanFiles();
+
+// 顶层 await：直接调用异步主函数
 await startserver().catch(error => {
   console.error('Unhandled error in startserver:', error);
 });
